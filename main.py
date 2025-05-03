@@ -1,11 +1,11 @@
+"""SIGNATURE APP"""
+import hashlib
 import subprocess
 import PIL.Image
 import numpy as np
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import serialization, hashes
-
-import os
 
 def generate_keys(private_key_name, public_key_name):
     """
@@ -24,19 +24,33 @@ def generate_keys(private_key_name, public_key_name):
         check=True
     )
 
+def get_image_hash(path_to_img):
+    """
+    Returns image hash
+    """
+    img = np.array(PIL.Image.open(path_to_img))
+    img_arr = img.flatten()
+
+    img_arr[:4096] &= 0b11111110
+    img_arr = img_arr.reshape(img_arr.shape)
+    img_hash = hashlib.sha256(img_arr.tobytes()).digest()
+
+    return img_hash
+
 def get_signature(path_to_img, path_to_private_key):
     """
     Generate signature for image using RSA algorithm
     """
-    with open(path_to_img, "rb") as f, open(path_to_private_key, "rb") as key_file:
-        image_data = f.read()
+    img_hash = get_image_hash(path_to_img)
+
+    with open(path_to_private_key, "rb") as key_file:
         private_key = serialization.load_pem_private_key(
             key_file.read(),
             password=None,
         )
 
     img_signature = private_key.sign(
-        image_data,
+        img_hash,
         padding.PSS(
             mgf=padding.MGF1(hashes.SHA256()),
             salt_length=padding.PSS.MAX_LENGTH
@@ -55,7 +69,7 @@ def sign_image(path_to_img, signed_img_name, signature):
 
     img = PIL.Image.open(path_to_img, "r").convert("RGB")
     width, height = img.size
-    channels = 3 # because of 3 main colors in RGB
+    channels = 3 # because RGB
     img_arr = np.array(img.getdata()).flatten()
     index = 0
 
@@ -69,13 +83,14 @@ def sign_image(path_to_img, signed_img_name, signature):
         img_arr.reshape((height, width, channels)).astype("uint8")
     ).save(signed_img_name)
 
-def validate_signature(path_to_signed_image, path_to_image, path_to_public_key):
+def validate_signature(path_to_signed_image, path_to_public_key):
     """
     Extract signature from signed image from its least significant bits
     and validate extracted signature
     """
-    with open(path_to_image, "rb") as f, open(path_to_public_key, "rb") as key_file:
-        origin_img = f.read()
+    sigend_img_hash = get_image_hash(path_to_signed_image)
+
+    with open(path_to_public_key, "rb") as key_file:
         public_key = serialization.load_pem_public_key(
             key_file.read()
         )
@@ -90,7 +105,7 @@ def validate_signature(path_to_signed_image, path_to_image, path_to_public_key):
     try:
         public_key.verify(
             extracted_sign,
-            origin_img,
+            sigend_img_hash,
             padding.PSS(
                 mgf=padding.MGF1(hashes.SHA256()),
                 salt_length=padding.PSS.MAX_LENGTH
@@ -108,10 +123,9 @@ if __name__ == "__main__":
     sign = get_signature("./images/test.png", "./keys/private_key.pem")
     sign_image("./images/test.png", "./images/test_signed.png", sign)
     CHECKER = validate_signature("./images/test_signed.png",
-                                 "./images/test.png",
                                  "./keys/public_key.pem")
 
     if CHECKER:
-        print("✅ Signature is correct")
+        print("Signature is correct")
     else:
-        print("❌ Signature is incorrect")
+        print("Signature is incorrect")
